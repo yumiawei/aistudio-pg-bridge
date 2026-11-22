@@ -2754,7 +2754,7 @@ function extractRequestAuth(req, body, relayClient, expectedApiKey, url = null) 
 
 function createRelayServer(options = {}) {
   const relayClient = options.client || new WaaRelayClient(options);
-  const host = options.host || process.env.RELAY_HOST || '127.0.0.1';
+  const host = options.host || process.env.RELAY_HOST || '0.0.0.0';
   const port = Number(options.port ?? process.env.RELAY_PORT ?? 18802);
   const apiKey = options.apiKey || process.env.RELAY_API_KEY || 'sk-waa-local-relay-key';
 
