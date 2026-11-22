@@ -1177,6 +1177,12 @@ function buildWireContentsFromPayload(payload = {}) {
     wireContents.push([[[null, '']], 'user']);
   }
 
+  while (wireContents.length > 0 && wireContents[wireContents.length - 1][1] === 'model') {
+    wireContents.pop();
+  }
+  if (wireContents.length === 0) {
+    wireContents.push([[[null, ' ']], 'user']);
+  }
   return wireContents;
 }
 
@@ -3039,6 +3045,12 @@ function createRelayServer(options = {}) {
       }
 
       const SUPPORTED_MODELS = [
+        { id: 'gemini-4-argon-search', name: 'Gemini 4 Argon (Search)', description: 'Google Search Enabled' },
+        { id: 'gemini-4-hydrogen-search', name: 'Gemini 4 Hydrogen (Search)', description: 'Google Search Enabled' },
+        { id: 'gemini-4-neon-search', name: 'Gemini 4 Neon (Search)', description: 'Google Search Enabled' },
+        { id: 'gemini-3.8-flash-search', name: 'Gemini 3.8 Flash (Search)', description: 'Google Search Enabled' },
+        { id: 'gemini-3.1-pro-preview-search', name: 'Gemini 3.1 Pro Preview (Search)', description: 'Google Search Enabled' },
+        { id: 'gemini-2.5-pro-search', name: 'Gemini 2.5 Pro (Search)', description: 'Google Search Enabled' },
         { id: 'gemini-4-argon', displayName: 'Gemini 4 Argon' },
         { id: 'gemini-4-argon-high', displayName: 'Gemini 4 Argon (High Thinking)' },
         { id: 'gemini-4-argon-low', displayName: 'Gemini 4 Argon (Low Thinking)' },
@@ -3132,7 +3144,9 @@ function createRelayServer(options = {}) {
               extraBody.thinking_config ||
               (extraBody.google && extraBody.google.thinking_config),
           };
-          const cleanModel = String(body.model || relayClient.defaultModel).replace(/^models\//, '');
+          let rawModel = String(body.model || relayClient.defaultModel).replace(/^models\//, '');
+          const isSearchModel = rawModel.endsWith('-search');
+          const cleanModel = isSearchModel ? rawModel.slice(0, -7) : rawModel;
           const streamId = `chatcmpl-${crypto.randomBytes(12).toString('hex')}`;
           const created = Math.floor(Date.now() / 1000);
 
@@ -3365,7 +3379,9 @@ function createRelayServer(options = {}) {
               : {}),
           };
           const tools = body.tools || null;
-          const cleanModel = String(model || relayClient.defaultModel).replace(/^models\//, '');
+          let rawModel = String(model || relayClient.defaultModel).replace(/^models\//, '');
+          const isSearchModel = rawModel.endsWith('-search');
+          const cleanModel = isSearchModel ? rawModel.slice(0, -7) : rawModel;
           let geminiHeadersSent = false;
           let sawFinishReason = false;
           let lastGeminiUsage = null;
@@ -3418,7 +3434,7 @@ function createRelayServer(options = {}) {
               wireContents,
               payload: body,
               tools,
-              model,
+              model: cleanModel,
               generationConfig,
               cookies: auth.cookies || relayClient.defaultCookies,
               authUser: auth.authUser ?? relayClient.defaultAuthUser,
