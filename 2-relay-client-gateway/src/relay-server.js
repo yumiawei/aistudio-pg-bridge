@@ -39,6 +39,15 @@ const DEFAULT_SAFETY_SETTINGS = [
   [null, null, 10, 5],
 ];
 
+// ── 默认 Google Search grounding（全局联网）───────────────────────────────
+// DEFAULT_GOOGLE_SEARCH=1（默认开）：客户端未显式传 tools 时，为普通文本模型
+// 自动注入 Google Search 工具，使所有调用默认可联网检索。
+// 跳过情形：图像模型 / 防外审截断包装模式 / 客户端已传任意 tools（避免与
+// function calling 冲突，Google 不允许 search 与 function calling 混用）。
+const DEFAULT_GOOGLE_SEARCH_ENABLED =
+  String(process.env.DEFAULT_GOOGLE_SEARCH ?? '1').trim() !== '0';
+const GOOGLE_SEARCH_WIRE_TOOL = [null, null, null, [null, [[]]]];
+
 // Official Google validator bypass token (`btoa("skip_thought_signature_validator")`)
 // used when an OpenAI-compatible client replays `assistant.tool_calls` without `thoughtSignature`.
 const SKIP_THOUGHT_SIG_VALIDATOR_B64 = Buffer.from(
@@ -1177,12 +1186,6 @@ function buildWireContentsFromPayload(payload = {}) {
     wireContents.push([[[null, '']], 'user']);
   }
 
-  while (wireContents.length > 0 && wireContents[wireContents.length - 1][1] === 'model') {
-    wireContents.pop();
-  }
-  if (wireContents.length === 0) {
-    wireContents.push([[[null, ' ']], 'user']);
-  }
   return wireContents;
 }
 
@@ -1323,7 +1326,17 @@ function buildWireGenerationConfig(generationConfig = {}, model = '') {
 function buildGenerateWireBody({ model, wireContents, tools, proof, generationConfig }) {
   const normModel = resolveModelAlias(model);
   const genCfg = buildWireGenerationConfig(generationConfig, model || normModel);
-  const toolsWire = encodeToolsWire(tools);
+  let toolsWire = encodeToolsWire(tools);
+
+  // 全局联网：客户端未传任何 tools 时，为普通文本模型自动补上 Google Search。
+  if (
+    DEFAULT_GOOGLE_SEARCH_ENABLED &&
+    !toolsWire &&
+    !isImageGenerationModel(normModel) &&
+    !isAntiCensorModel(model)
+  ) {
+    toolsWire = [GOOGLE_SEARCH_WIRE_TOOL];
+  }
 
   const wire = [
     normModel,
@@ -2754,7 +2767,7 @@ function extractRequestAuth(req, body, relayClient, expectedApiKey, url = null) 
 
 function createRelayServer(options = {}) {
   const relayClient = options.client || new WaaRelayClient(options);
-  const host = options.host || process.env.RELAY_HOST || '0.0.0.0';
+  const host = options.host || process.env.RELAY_HOST || '127.0.0.1';
   const port = Number(options.port ?? process.env.RELAY_PORT ?? 18802);
   const apiKey = options.apiKey || process.env.RELAY_API_KEY || 'sk-waa-local-relay-key';
 
@@ -3045,12 +3058,6 @@ function createRelayServer(options = {}) {
       }
 
       const SUPPORTED_MODELS = [
-        { id: 'gemini-4-argon-search', name: 'Gemini 4 Argon (Search)', description: 'Google Search Enabled' },
-        { id: 'gemini-4-hydrogen-search', name: 'Gemini 4 Hydrogen (Search)', description: 'Google Search Enabled' },
-        { id: 'gemini-4-neon-search', name: 'Gemini 4 Neon (Search)', description: 'Google Search Enabled' },
-        { id: 'gemini-3.8-flash-search', name: 'Gemini 3.8 Flash (Search)', description: 'Google Search Enabled' },
-        { id: 'gemini-3.1-pro-preview-search', name: 'Gemini 3.1 Pro Preview (Search)', description: 'Google Search Enabled' },
-        { id: 'gemini-2.5-pro-search', name: 'Gemini 2.5 Pro (Search)', description: 'Google Search Enabled' },
         { id: 'gemini-4-argon', displayName: 'Gemini 4 Argon' },
         { id: 'gemini-4-argon-high', displayName: 'Gemini 4 Argon (High Thinking)' },
         { id: 'gemini-4-argon-low', displayName: 'Gemini 4 Argon (Low Thinking)' },
@@ -3144,9 +3151,7 @@ function createRelayServer(options = {}) {
               extraBody.thinking_config ||
               (extraBody.google && extraBody.google.thinking_config),
           };
-          let rawModel = String(body.model || relayClient.defaultModel).replace(/^models\//, '');
-          const isSearchModel = rawModel.endsWith('-search');
-          const cleanModel = isSearchModel ? rawModel.slice(0, -7) : rawModel;
+          const cleanModel = String(body.model || relayClient.defaultModel).replace(/^models\//, '');
           const streamId = `chatcmpl-${crypto.randomBytes(12).toString('hex')}`;
           const created = Math.floor(Date.now() / 1000);
 
@@ -3379,9 +3384,7 @@ function createRelayServer(options = {}) {
               : {}),
           };
           const tools = body.tools || null;
-          let rawModel = String(model || relayClient.defaultModel).replace(/^models\//, '');
-          const isSearchModel = rawModel.endsWith('-search');
-          const cleanModel = isSearchModel ? rawModel.slice(0, -7) : rawModel;
+          const cleanModel = String(model || relayClient.defaultModel).replace(/^models\//, '');
           let geminiHeadersSent = false;
           let sawFinishReason = false;
           let lastGeminiUsage = null;
@@ -3434,7 +3437,7 @@ function createRelayServer(options = {}) {
               wireContents,
               payload: body,
               tools,
-              model: cleanModel,
+              model,
               generationConfig,
               cookies: auth.cookies || relayClient.defaultCookies,
               authUser: auth.authUser ?? relayClient.defaultAuthUser,
