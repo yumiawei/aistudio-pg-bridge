@@ -49,7 +49,11 @@ function normalizeProxyUrl(raw) {
     if (u.protocol !== 'http:' && u.protocol !== 'https:') {
       return null;
     }
-    return `http://${u.hostname}:${u.port}`;
+    // 保留账号密码（静态住宅代理通常带认证）；没有认证时行为与原来一致。
+    const auth = u.username
+      ? `${encodeURIComponent(decodeURIComponent(u.username))}:${encodeURIComponent(decodeURIComponent(u.password))}@`
+      : '';
+    return `http://${auth}${u.hostname}:${u.port}`;
   } catch {
     return null;
   }
@@ -237,15 +241,26 @@ async function resolveSystemProxyInfo(forceRefresh = false) {
   }
   _resolvingPromise = (async () => {
     try {
-      const syncDetected = detectEnvProxy() || detectOsSystemProxy();
-      if (syncDetected && syncDetected.proxyUrl) {
-        const u = new URL(syncDetected.proxyUrl);
+      const envDetected = detectEnvProxy();
+      if (envDetected && envDetected.proxyUrl) {
+        // 环境变量里显式配置的代理一律信任，不做 TCP 探测：
+        // 远端住宅代理通常要求认证，裸 TCP 探测会误判为不可达。
+        _cachedProxy = {
+          checkedAt: Date.now(),
+          proxyUrl: envDetected.proxyUrl,
+          source: envDetected.source,
+        };
+        return _cachedProxy;
+      }
+      const osDetected = detectOsSystemProxy();
+      if (osDetected && osDetected.proxyUrl) {
+        const u = new URL(osDetected.proxyUrl);
         const reachable = await probeTcpPort(u.hostname, Number(u.port), 250);
         if (reachable) {
           _cachedProxy = {
             checkedAt: Date.now(),
-            proxyUrl: syncDetected.proxyUrl,
-            source: syncDetected.source,
+            proxyUrl: osDetected.proxyUrl,
+            source: osDetected.source,
           };
           return _cachedProxy;
         }
@@ -364,6 +379,14 @@ function requestViaHttpProxy(targetUrlStr, options, proxyUrlStr) {
     const body = options && options.body != null ? options.body : null;
     const signal = options && options.signal ? options.signal : null;
 
+    // 代理认证（静态住宅代理需要）：CONNECT 与明文转发都要带 Proxy-Authorization。
+    let proxyAuthHeader = null;
+    if (proxyUrl.username || proxyUrl.password) {
+      const user = decodeURIComponent(proxyUrl.username);
+      const pass = decodeURIComponent(proxyUrl.password);
+      proxyAuthHeader = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+    }
+
     if (body != null && !headers['content-length'] && !headers['Content-Length']) {
       headers['content-length'] = String(Buffer.byteLength(body));
     }
@@ -378,6 +401,7 @@ function requestViaHttpProxy(targetUrlStr, options, proxyUrlStr) {
           headers: {
             ...headers,
             Host: targetUrl.host,
+            ...(proxyAuthHeader ? { 'Proxy-Authorization': proxyAuthHeader } : {}),
           },
           agent: false,
           signal,
@@ -400,6 +424,7 @@ function requestViaHttpProxy(targetUrlStr, options, proxyUrlStr) {
       path: `${targetUrl.hostname}:${targetPort}`,
       headers: {
         Host: `${targetUrl.hostname}:${targetPort}`,
+        ...(proxyAuthHeader ? { 'Proxy-Authorization': proxyAuthHeader } : {}),
       },
       agent: false,
       timeout: 5000,
